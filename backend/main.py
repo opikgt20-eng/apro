@@ -1,0 +1,114 @@
+import logging
+import os
+
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# Initialize environment and configuration
+import backend.config
+from backend.config import logger
+from backend.routers import (
+    analyze_router,
+    cookies_router,
+    downloads_router,
+    media_router,
+    render_router,
+    system_router,
+)
+# Re-exports for backwards compatibility
+from backend.schemas.analyze import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    HeatmapPoint,
+    TranscriptLine,
+    VideoAnalysis,
+    ViralClip,
+    ViralClipGemini,
+)
+from backend.schemas.downloads import (
+    CookiesSaveRequest,
+    RawClipDownloadRequest,
+    RawVideoDownloadRequest,
+)
+from backend.schemas.render import (
+    RenderBatchRequest,
+    RenderSettingsModel,
+    RetryBatchRequest,
+)
+from backend.services.download_service import (
+    raw_clip_download_jobs,
+    raw_download_jobs,
+)
+from backend.services.render_service import (
+    BATCH_REQUESTS,
+    RENDER_BATCHES,
+)
+
+# Initialize FastAPI Application
+app = FastAPI(
+    title="ANDIKA CLIP PRO API",
+    description="High-performance backend API for Cheat Clip Pro auto-clipper and video studio",
+    version="2.0.0"
+)
+
+# CORS configuration supporting configurable ALLOWED_ORIGINS and local development
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if allowed_origins_env:
+    allow_origins = [orig.strip() for orig in allowed_origins_env.split(",") if orig.strip()]
+else:
+    allow_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_origin_regex=r"^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Adds standard security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
+
+# Include Modular Routers
+app.include_router(analyze_router)
+app.include_router(render_router)
+app.include_router(media_router)
+app.include_router(cookies_router)
+app.include_router(downloads_router)
+app.include_router(system_router)
+
+logger.info("Cheat Clip PRO backend routers mounted successfully.")
+
+@app.get("/health", tags=["System"])
+async def health_check():
+    return {"status": "ok", "service": "cheat-clip-pro"}
+
+# Serve the Vite production build from the same Railway service.
+# API routes above keep priority over this catch-all static mount.
+FRONTEND_DIST = backend.config.ROOT_DIR / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("backend.main:app", host=host, port=port, reload=True)
